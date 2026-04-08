@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ametrin: Live Charts Rotator</title>
+  <style>
+    :root{
+      --bg:#ffffff; --fg:#0b1020; --bar-bg:#ffffff; --bar-fg:#0b1020;
+
+      --content-max-w: 2400px;
+      --outer-pad: 10px 12px 0;
+      --radius: 14px;
+      --page-scale: 1;
+
+      --header-pad: 10px;
+      --fade-ms: 1700ms;
+      --ease: cubic-bezier(0.16,1,0.3,1);
+
+      --logo-scale: 1.5;
+      --caption-size: 1.05rem;
+
+      --caption-sub-size: .82rem;
+      --caption-sub-opacity: .8;
+    }
+
+    html, body {height:100%;}
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial; background:var(--bg); color:var(--fg); }
+
+    .topbar{
+      position:sticky; top:0; z-index:10;
+      display:flex; justify-content:space-between; align-items:flex-start; gap:12px;
+      padding:var(--header-pad) 16px; background:var(--bar-bg); color:var(--bar-fg);
+      border-bottom:1px solid #e5e7eb
+    }
+    .left,.right{ display:flex; flex-direction:column; gap:4px; }
+
+    .brand{display:none}
+    .logo{ height: calc(32px * var(--logo-scale)); width:auto; display:block; object-fit:contain; user-select:none; }
+
+    .asof{ font-size: var(--caption-sub-size); opacity: var(--caption-sub-opacity); white-space:nowrap; }
+
+    .place{display:none}
+    .datetime{font-size:2.4rem; font-weight:900; line-height:1.05; text-align:right}
+    .weather{font-size:1.05rem; opacity:.9; text-align:right; white-space:nowrap}
+
+    .wrap{ display:flex; justify-content:center; padding: var(--outer-pad); transform: scale(var(--page-scale)); transform-origin: top center; }
+    .card{ width:100%; max-width: var(--content-max-w); }
+
+    .stage{
+      position:relative; width:100%;
+      height: var(--stage-h, calc(100vh - (2*var(--header-pad) + 1px + 24px)));
+      border:1px solid #e5e7eb; border-radius: var(--radius);
+      overflow:hidden; background:#fff; contain:layout style paint;
+    }
+
+    .slide{
+      position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+      opacity:0; background:#fff; will-change:opacity,transform; backface-visibility:hidden; transform:translateZ(0);
+    }
+    .slide iframe,.slide img,.slide video{width:100%; height:100%; border:0; display:block}
+    .slide img{
+      object-fit:var(--img-fit, contain); object-position:var(--img-pos, center center);
+      padding:var(--img-pad, 0px); max-width:var(--img-max-w, 100%); max-height:var(--img-max-h, 100%); transform:scale(var(--img-scale, 1));
+      background: var(--img-bg, #fff);
+    }
+    .slide video{ object-fit:contain; object-position:center; background:#fff; }
+    iframe::-webkit-scrollbar{display:none}
+
+    .caption{
+      position:absolute; left:0; right:0; top:0;
+      display:flex; justify-content:center; pointer-events:none;
+      padding:8px 16px;
+      background:linear-gradient(to bottom, rgba(255,255,255,.92), rgba(255,255,255,0));
+      text-align:center;
+    }
+    .caption .title{
+      max-width:92%; font-weight:800; line-height:1.2;
+      font-size: var(--caption-size); color:#111827;
+      text-shadow: 0 1px 0 rgba(255,255,255,.6);
+    }
+
+    .quote-wrap{
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      padding:32px; text-align:center; gap:18px;
+      width:100%; height:100%; background:#fff;
+    }
+    .quote-text{ font-size: clamp(1.4rem, 4.2vw, 2.2rem); font-weight: 800; line-height: 1.25; color:#0b1020; }
+    .quote-author{ font-size: clamp(1rem, 2vw, 1.1rem); font-weight: 700; opacity:.75; }
+
+    .footer{ text-align:center; opacity:.6; font-size:.9rem; padding:8px }
+
+    @media (max-width:640px){
+      .datetime{font-size:1.2rem}
+      .weather{font-size:.95rem}
+    }
+    @media (prefers-reduced-motion:reduce){ :root{ --fade-ms:0ms } }
+
+    /* ====== АБСОЛЮТНИЙ FULLSCREEN ДЛЯ ВІДЕО (без шапки/погоди/футера) ====== */
+    body.fs-mode{ overflow:hidden; }
+
+    body.fs-mode .topbar,
+    body.fs-mode .footer{
+      display:none !important;
+    }
+
+    body.fs-mode .wrap{
+      padding:0 !important;
+      transform:none !important;
+    }
+
+    body.fs-mode .card{
+      max-width:none !important;
+      width:100vw !important;
+    }
+
+    body.fs-mode .stage{
+      height:100vh !important;
+      border:0 !important;
+      border-radius:0 !important;
+    }
+
+    .slide.fullscreen-video{
+      position:fixed;
+      inset:0;
+      z-index:9999;
+      border-radius:0;
+      background:#000;
+    }
+    .slide.fullscreen-video video{
+      width:100vw;
+      height:100vh;
+      object-fit:cover; /* хочеш без обрізки — постав contain */
+      background:#000;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="left">
+      <img class="logo" src="Ametrin1 copy.png" alt="Ametrin — ротація діаграм" />
+      <div id="asof" class="asof">Оновлено: —</div>
+      <div id="place" class="place"></div>
+      <div class="brand">Ametrin <span class="dot">•</span> Ротація діаграм</div>
+    </div>
+    <div class="right">
+      <div id="datetime" class="datetime"></div>
+      <div id="weather" class="weather"></div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="card">
+      <div id="stage" class="stage" role="region" aria-label="Ротація діаграм і медіа"></div>
+      <div class="footer">Україна, м. Київ, 2025р.</div>
+    </div>
+  </main>
+
+<script>
+  /* === НАЛАШТУВАННЯ === */
+  const SETTINGS = {
+    maxWidth: 1820,
+    stageHeight: '88vh',
+    headerPadPx: 8,
+    outerPad: '8px 12px 0',
+    radiusPx: 16,
+    pageScale: 1,
+    logoScale: 1.6,
+    captionSize: '1.785rem'
+  };
+  (function applySizeSettings(s){
+    const r = document.documentElement, toPx = v => (typeof v === 'number' ? v + 'px' : String(v));
+    if (s.maxWidth !== undefined) r.style.setProperty('--content-max-w', toPx(s.maxWidth));
+    if (s.stageHeight) r.style.setProperty('--stage-h', String(s.stageHeight)); else r.style.removeProperty('--stage-h');
+    if (s.headerPadPx !== undefined) r.style.setProperty('--header-pad', toPx(s.headerPadPx));
+    if (s.outerPad !== undefined) r.style.setProperty('--outer-pad', String(s.outerPad));
+    if (s.radiusPx !== undefined) r.style.setProperty('--radius', toPx(s.radiusPx));
+    if (s.pageScale !== undefined) r.style.setProperty('--page-scale', String(s.pageScale));
+    if (s.logoScale !== undefined) r.style.setProperty('--logo-scale', String(s.logoScale));
+    if (s.captionSize !== undefined) r.style.setProperty('--caption-size', String(s.captionSize));
+  })(SETTINGS);
+
+  /* === РЕГІОН/ПОГОДА/ГОДИННИК === */
+  const REGION = { lat:50.4501, lon:30.5234, label:"Київ", tz:"Europe/Kyiv" };
+  const DEFAULT_ROTATE_MS = 30_000;
+  const CACHE_BUST_MINUTES = 5;
+  const WEATHER_REFRESH_MIN = 10;
+
+  function fmtDateKyiv(d){
+    const opts = { day:'2-digit', month:'2-digit', year:'numeric', timeZone:REGION.tz };
+    return new Intl.DateTimeFormat('uk-UA', opts).format(d);
+  }
+  function fmtTimeKyiv(d){
+    const opts = { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false, timeZone:REGION.tz };
+    return new Intl.DateTimeFormat('uk-UA', opts).format(d);
+  }
+  function kyivTodayYMD(){
+    const now = new Date();
+    const y = new Intl.DateTimeFormat('en-CA', {year:'numeric',  timeZone:REGION.tz}).format(now);
+    const m = new Intl.DateTimeFormat('en-CA', {month:'2-digit', timeZone:REGION.tz}).format(now);
+    const d = new Intl.DateTimeFormat('en-CA', {day:'2-digit',   timeZone:REGION.tz}).format(now);
+    return `${y}-${m}-${d}`; // YYYY-MM-DD
+  }
+
+  function updateClock(){
+    const now = new Date();
+    document.getElementById('datetime').textContent = `${fmtDateKyiv(now)} · ${fmtTimeKyiv(now)}`;
+  }
+  updateClock(); setInterval(updateClock, 1000);
+
+  async function loadWeather(){
+    try{
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${REGION.lat}&longitude=${REGION.lon}&current=temperature_2m,wind_speed_10m&timezone=auto`;
+      const res = await fetch(url, {cache:'no-store'});
+      const data = await res.json();
+      const cur = data.current || {};
+      const t = cur.temperature_2m, w = cur.wind_speed_10m;
+      const parts = [REGION.label];
+      if (isFinite(t)) parts.push(`🌡️ ${t}°C`);
+      if (isFinite(w)) parts.push(`💨 ${w} м/с`);
+      document.getElementById('weather').textContent = parts.join(' · ');
+    }catch{
+      document.getElementById('weather').textContent = `${REGION.label} · —`;
+    }
+  }
+  loadWeather(); setInterval(loadWeather, WEATHER_REFRESH_MIN*60*1000);
+
+  /* === “Оновлено:” з твоєї таблиці (A2) === */
+  const SHEET_ID = '11orFp1RqJXj2_rzXjOwf3k7NclMO40RoP3wNZy6EZMA';
+  const SHEET_GID = '584610863';
+  const QUOTES_GID = '2084631518'; // аркуш із цитатами (A: дата, B: цитата, C: автор)
+
+  function gvizCsvUrlA2(id, gid){
+    return `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?gid=${gid}&range=A2:A2&tqx=out:csv`;
+  }
+  function gvizCsvUrlAll(id, gid){
+    return `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?gid=${gid}&tqx=out:csv`;
+  }
+
+  let REPORT_TIMESTAMP = null;
+  function renderAsOf(){
+    document.getElementById('asof').textContent = `Оновлено: ${REPORT_TIMESTAMP ?? '—'}`;
+  }
+  async function loadReportTimestamp(){
+    try{
+      const res = await fetch(gvizCsvUrlA2(SHEET_ID, SHEET_GID), {cache:'no-store'});
+      const text = await res.text();
+      const v = text.split(/\r?\n/)[0]?.replace(/^"|"$/g,'').trim(); // очікуємо: 20.10.2025 11:00:14
+      REPORT_TIMESTAMP = v || null;
+    }catch{
+      REPORT_TIMESTAMP = null;
+    }
+    renderAsOf();
+  }
+  loadReportTimestamp();
+  setInterval(loadReportTimestamp, 5*60*1000);
+
+  /* === PLAYLIST === */
+  const docPubBase = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT1A9jHUrRE2MRSHGVX2x3HAZ9AU_CSadqAYkgI84wWylFRrR-WQuiLnNT6_tJXi3-bkwO6SZBNV4Rq";
+  const PLAYLIST = [
+    /* 1) ДІАГРАМИ */
+    { type:'chart', title:'План-Факт за день',          gid:'1246423862', pubchartUrl:"", oid:null, durationMs: 20000 },
+    { type:'chart', title:'Загальний план',             gid:'32794338',   pubchartUrl:"", oid:null, durationMs: 20000 },
+    { type:'chart', title:'Кількість спущених позицій', gid:'2095647029', pubchartUrl:"", oid:null, durationMs: 20000 },
+    { type:'chart', title:'Продаж ВТМ',                 gid:'1406852426', pubchartUrl:"", oid:null, durationMs: 20000 },
+    { type:'chart', title:'Продаж Промо ДП',            gid:'1930798029', pubchartUrl:"", oid:null, durationMs: 20000 },
+    { type:'chart', title:'Продаж ПРОМО (4)',           gid:'993430037',  pubchartUrl:"", oid:null, durationMs: 20000 },
+    { type:'chart', title:'План-факт виконання ВТМ',    gid:'933193236',  pubchartUrl:"", oid:null, durationMs: 20000 },
+
+    /* 3) ВІДЕО */
+    { type:'video', url:"Logo Ametrin.mp4" },
+    { type:'video', url:"video.mp4" },
+    { type:'video', url:"video position.mp4", fullscreen:true }, /* <-- ОЦЕ ВІДЕО: 100% екран, без шапки/погоди */
+
+
+    /* 4) ІНШІ ЗОБРАЖЕННЯ */
+    { type:'image', url:"img/gepa.png",       fit:'contain', scale:1.00, maxW:'100%', maxH:'100%', align:'center center', bg:'#fff', durationMs: 5000 },
+    { type:'image', url:"img/render.png",     fit:'contain', scale:1.00, maxW:'100%', maxH:'100%', align:'center center', bg:'#fff', durationMs: 5000 },
+    { type:'image', url:"img/honrdro.png",    fit:'contain', scale:1.00, maxW:'100%', maxH:'100%', align:'center center', bg:'#fff', durationMs: 5000 },
+    { type:'image', url:"img/Colchicina.png", fit:'contain', scale:1.00, maxW:'100%', maxH:'100%', align:'center center', bg:'#fff', durationMs: 5000 },
+
+    /* 5) ЦИТАТА ДНЯ */
+    { type:'quote', durationMs: 15000 }
+  ];
+
+  /* === Побудова лінку для діаграм === */
+  function buildChartUrl(item){
+    if (item.pubchartUrl){
+      try{
+        const u = new URL(item.pubchartUrl);
+        if (u.pathname.includes('/pubchart')) u.searchParams.set('format','interactive');
+        return u.toString();
+      }catch{}
+    }
+    if (item.oid){
+      const u = new URL(docPubBase + '/pubchart');
+      u.searchParams.set('oid', String(item.oid));
+      u.searchParams.set('format', 'interactive');
+      return u.toString();
+    }
+    const u = new URL(docPubBase + '/pubhtml');
+    u.searchParams.set('gid', String(item.gid));
+    u.searchParams.set('single', 'true');
+    u.searchParams.set('widget','true');
+    u.searchParams.set('headers','false');
+    u.searchParams.set('chrome','false');
+    return u.toString();
+  }
+
+  /* === УТИЛІТИ === */
+  function withCacheBuster(u){
+    if (!CACHE_BUST_MINUTES) return u;
+    try{
+      const url = new URL(u, location.href);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return u;
+      const bucket = Math.floor(Date.now() / (CACHE_BUST_MINUTES*60*1000));
+      url.searchParams.set('_cb', String(bucket));
+      return url.toString();
+    }catch{ return u; }
+  }
+  function formatShortUADateKyiv(d){
+    const dd = new Intl.DateTimeFormat('uk-UA', {day:'2-digit', timeZone:REGION.tz}).format(d);
+    const mm = new Intl.DateTimeFormat('uk-UA', {month:'2-digit', timeZone:REGION.tz}).format(d);
+    const yy = String(new Intl.DateTimeFormat('uk-UA', {year:'2-digit', timeZone:REGION.tz}).format(d));
+    return `${dd}.${mm}.${yy}`;
+  }
+
+  /* === CSV-парсер (стійкий до лапок/ком) === */
+  function parseCsv(text){
+    const rows = []; let row = []; let cur = ''; let q = false;
+    for (let i=0;i<text.length;i++){
+      const c = text[i], n = text[i+1];
+      if (q){
+        if (c === '"' && n === '"'){ cur += '"'; i++; }
+        else if (c === '"'){ q = false; }
+        else { cur += c; }
+      } else {
+        if (c === '"'){ q = true; }
+        else if (c === ','){ row.push(cur); cur = ''; }
+        else if (c === '\n'){ row.push(cur); rows.push(row); row = []; cur = ''; }
+        else if (c === '\r'){ /* ignore */ }
+        else { cur += c; }
+      }
+    }
+    if (cur.length || row.length) { row.push(cur); rows.push(row); }
+    return rows;
+  }
+
+  /* === Нормалізація дати до YYYY-MM-DD БЕЗ UTC-зсувів === */
+  function normDateYMD(s){
+    if (s == null) return null;
+    s = String(s).replace(/\uFEFF/g,'').trim(); // зняти BOM
+    if (!s) return null;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    const mDot = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(s);
+    if (mDot){
+      const dd = mDot[1].padStart(2,'0'), mm = mDot[2].padStart(2,'0'), yy = mDot[3];
+      return `${yy}-${mm}-${dd}`;
+    }
+
+    const mSlash = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+    if (mSlash){
+      let a = parseInt(mSlash[1],10), b = parseInt(mSlash[2],10), y = mSlash[3];
+      let mm, dd;
+      if (a > 12){ dd = a; mm = b; } else { mm = a; dd = b; }
+      return `${y}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+    }
+
+    const d = new Date(s);
+    if (!isNaN(d)){
+      const y = new Intl.DateTimeFormat('en-CA', {year:'numeric', timeZone:REGION.tz}).format(d);
+      const m = new Intl.DateTimeFormat('en-CA', {month:'2-digit', timeZone:REGION.tz}).format(d);
+      const dd = new Intl.DateTimeFormat('en-CA', {day:'2-digit', timeZone:REGION.tz}).format(d);
+      return `${y}-${m}-${dd}`;
+    }
+    return null;
+  }
+
+  /* === ЦИТАТА ДНЯ: СТРОГИЙ ЗБІГ ДАТИ (A: дата, B: цитата, C: автор) === */
+  async function getDailyQuoteFromSheet(){
+    const today = kyivTodayYMD();
+    const cacheKey = 'ametrin_quote_strict_' + today;
+
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+
+    let quote = { text: '—', author: '' };
+
+    try{
+      const res = await fetch(gvizCsvUrlAll(SHEET_ID, QUOTES_GID), {cache:'no-store'});
+      const csv = await res.text();
+      const rows = parseCsv(csv);
+
+      let startIdx = 0;
+      if (rows[0] && (String(rows[0][0]||'').toLowerCase().includes('дата') || String(rows[0][1]||'').toLowerCase().includes('цитата'))){
+        startIdx = 1;
+      }
+
+      for (let i = startIdx; i < rows.length; i++){
+        const [a,b,c] = rows[i];
+        const ymd = normDateYMD(a);
+        if (!ymd) continue;
+        if (ymd === today){
+          quote = { text: (b||'').trim() || '—', author: (c||'').trim() };
+          break;
+        }
+      }
+    }catch{}
+
+    try { localStorage.setItem(cacheKey, JSON.stringify(quote)); } catch {}
+    return quote;
+  }
+
+  function createQuoteNode(quoteObj){
+    const box = document.createElement('div');
+    box.className = 'quote-wrap';
+    const t = document.createElement('div'); t.className = 'quote-text'; t.textContent = '“' + (quoteObj.text || '') + '”';
+    const a = document.createElement('div'); a.className = 'quote-author'; a.textContent = quoteObj.author ? ('— ' + quoteObj.author) : '';
+    box.appendChild(t); box.appendChild(a);
+    return box;
+  }
+
+  function refreshQuoteSlides(){
+    document.querySelectorAll('.slide .quote-wrap').forEach(async (holder)=>{
+      holder.innerHTML = '';
+      const q = await getDailyQuoteFromSheet();
+      holder.appendChild(createQuoteNode(q));
+    });
+  }
+
+  /* === СЛАЙДИ === */
+  function applyImageVars(img, opts = {}){
+    const s = img.style;
+    if (opts.fit)   s.setProperty('--img-fit', opts.fit);
+    if (opts.align) s.setProperty('--img-pos', opts.align);
+    if (opts.pad)   s.setProperty('--img-pad', opts.pad);
+    if (opts.maxW)  s.setProperty('--img-max-w', opts.maxW);
+    if (opts.maxH)  s.setProperty('--img-max-h', opts.maxH);
+    if (opts.scale) s.setProperty('--img-scale', String(opts.scale));
+    if (opts.bg)    s.setProperty('--img-bg', opts.bg);
+  }
+
+  function createSlideNode(item, chartNumber){
+    const slide = document.createElement('div');
+    slide.className = 'slide';
+    slide.style.opacity = 0;
+
+    if (item.type === 'image'){
+      const img = document.createElement('img');
+      img.alt = item.alt || 'Зображення'; img.decoding = 'async'; img.loading = 'eager';
+      img.src = withCacheBuster(item.url);
+      img.onerror = ()=>{ img.alt = 'Помилка завантаження зображення'; };
+      applyImageVars(img, item);
+      slide.appendChild(img);
+
+    } else if (item.type === 'video'){
+      const video = document.createElement('video');
+      video.src = item.url; video.autoplay = true; video.muted = true; video.playsInline = true;
+      video.controls = false; video.preload = 'auto';
+      slide.appendChild(video);
+
+      // ====== FULLSCREEN-MODE (для конкретного відео) ======
+      if (item.fullscreen === true){
+        slide.classList.add('fullscreen-video');
+        // body.fs-mode буде вмикатись/вимикатись в show(), щоб коректно прибирати шапку/футер
+      }
+
+    } else if (item.type === 'quote'){
+      const holder = document.createElement('div');
+      holder.className = 'quote-wrap';
+      holder.appendChild(createQuoteNode({text:'Завантаження цитати…', author:''}));
+      slide.appendChild(holder);
+      getDailyQuoteFromSheet().then(q=>{ holder.innerHTML = ''; holder.appendChild(createQuoteNode(q)); });
+
+    } else { // chart
+      const cap = document.createElement('div'); cap.className = 'caption';
+      const titleEl = document.createElement('div'); titleEl.className = 'title';
+      const title = item.title || `Діаграма №${chartNumber}`;
+      titleEl.textContent = `${title} на ${formatShortUADateKyiv(new Date())}`;
+      cap.appendChild(titleEl); slide.appendChild(cap);
+
+      const iframe = document.createElement('iframe');
+      iframe.referrerPolicy = 'no-referrer';
+      iframe.scrolling = 'no';
+      iframe.allowFullscreen = true;
+      iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
+      iframe.allow = 'fullscreen';
+      iframe.src = withCacheBuster(buildChartUrl(item));
+      slide.appendChild(iframe);
+    }
+    return slide;
+  }
+
+  function preloadIfImage(item){
+    return new Promise(res=>{
+      if (item.type !== 'image') return res();
+      const i = new Image(); i.onload = res; i.onerror = res;
+      i.src = withCacheBuster(item.url);
+    });
+  }
+
+  function waitIframeLoad(slide){
+    return new Promise(res=>{
+      const iframe = slide.querySelector('iframe'); if (!iframe) return res();
+      const done = ()=>res();
+      const t = setTimeout(done, 15000);
+      iframe.addEventListener('load', ()=>{ clearTimeout(t); done(); }, {once:true});
+    });
+  }
+  function waitVideoStart(slide){
+    return new Promise(res=>{
+      const video = slide.querySelector('video'); if (!video) return res();
+      const t = setTimeout(res, 15000);
+      video.addEventListener('playing', ()=>{ clearTimeout(t); res(); }, {once:true});
+    });
+  }
+
+  /* === АНІМАЦІЯ === */
+  const DURATION = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fade-ms')) || 900;
+  const EASING   = getComputedStyle(document.documentElement).getPropertyValue('--ease') || 'ease';
+  function animateIn(el){
+    const noMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (noMotion || !DURATION) { el.style.opacity = 1; return Promise.resolve(); }
+    el.style.opacity = 0;
+    const anim = el.animate([{opacity:0, transform:'scale(0.985)'},{opacity:1, transform:'scale(1)'}], {duration:DURATION, easing:EASING, fill:'forwards'});
+    return anim.finished.catch(()=>{});
+  }
+  function animateOut(el){
+    const noMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (noMotion || !DURATION) { el.style.opacity = 0; return Promise.resolve(); }
+    const anim = el.animate([{opacity:1, transform:'scale(1)'},{opacity:0, transform:'scale(1.005)'}], {duration:DURATION, easing:EASING, fill:'forwards'});
+    return anim.finished.catch(()=>{});
+  }
+
+  /* === FULLSCREEN-MODE HELPERS === */
+  function setFsMode(on){
+    document.body.classList.toggle('fs-mode', !!on);
+  }
+
+  /* === РОТАЦІЯ === */
+  const stage = document.getElementById('stage');
+  let idx = Number(localStorage.getItem('ametrin_idx') || 0);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= PLAYLIST.length) idx = 0;
+
+  let currentSlide = null;
+  let nextTimer = null;
+  let paused = false;
+
+  function scheduleNext(ms){ clearTimeout(nextTimer); if (!paused) nextTimer = setTimeout(()=> show(idx+1), ms); }
+  function pause(){ paused = true; clearTimeout(nextTimer); }
+  function resume(){
+    if (!paused) return;
+    paused = false;
+    const curItem = PLAYLIST[idx] || {};
+    scheduleNext(curItem.durationMs ?? DEFAULT_ROTATE_MS);
+  }
+
+  function getChartNumberForIndex(i){
+    let n = 0;
+    for (let k=0; k<=i; k++){ if (PLAYLIST[(k+PLAYLIST.length)%PLAYLIST.length]?.type === 'chart') n++; }
+    return n || 1;
+  }
+
+  async function show(i){
+    if (!PLAYLIST.length) return;
+    idx = (i + PLAYLIST.length) % PLAYLIST.length;
+    localStorage.setItem('ametrin_idx', String(idx));
+    const item = PLAYLIST[idx];
+
+    await preloadIfImage(item);
+
+    const incoming = createSlideNode(item, getChartNumberForIndex(idx));
+    stage.appendChild(incoming);
+
+    await Promise.all([ waitIframeLoad(incoming), waitVideoStart(incoming) ]);
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+
+    const outgoing = currentSlide;
+
+    // Вмикаємо/вимикаємо режим до анімації, щоб шапка/футер зникли моментально
+    const incomingIsFs = incoming.classList.contains('fullscreen-video');
+    const outgoingIsFs = outgoing && outgoing.classList && outgoing.classList.contains('fullscreen-video');
+
+    if (incomingIsFs) setFsMode(true);
+    else if (outgoingIsFs) setFsMode(false);
+
+    await Promise.all([ animateIn(incoming), outgoing ? animateOut(outgoing) : Promise.resolve() ]);
+
+    if (outgoing && outgoing.parentNode === stage) stage.removeChild(outgoing);
+    currentSlide = incoming;
+
+    // Відео: переходимо по ended + резервний таймер
+    const video = incoming.querySelector('video');
+    if (video){
+      clearTimeout(nextTimer);
+      const safeMs = item.durationMs ?? DEFAULT_ROTATE_MS;
+
+      const onEnd = ()=>{
+        try{ video.removeEventListener('ended', onEnd); }catch{}
+        // Якщо це fullscreen-відео — вимкнути режим перед переходом
+        if (incoming.classList.contains('fullscreen-video')) setFsMode(false);
+        show(idx+1);
+      };
+
+      video.addEventListener('ended', onEnd, {once:true});
+
+      nextTimer = setTimeout(()=>{
+        try{ video.removeEventListener('ended', onEnd); }catch{}
+        if (incoming.classList.contains('fullscreen-video')) setFsMode(false);
+        show(idx+1);
+      }, Math.max(5000, safeMs));
+    }else{
+      scheduleNext(item.durationMs ?? DEFAULT_ROTATE_MS);
+    }
+  }
+
+  // старт
+  show(idx);
+
+  // авто-скидання кешу цитати опівночі за Києвом
+  (function scheduleMidnightReset(){
+    const tz = REGION.tz;
+    const now = new Date();
+    const kyivNow = new Date(new Date(now).toLocaleString('en-US', { timeZone: tz }));
+    const nextMidnight = new Date(kyivNow.getFullYear(), kyivNow.getMonth(), kyivNow.getDate()+1, 0,0,2);
+    const ms = nextMidnight - kyivNow;
+    setTimeout(()=>{
+      try{ Object.keys(localStorage).forEach(k=>{ if(k.startsWith('ametrin_quote_strict_')) localStorage.removeItem(k); }); }catch{}
+      refreshQuoteSlides();
+      scheduleMidnightReset();
+    }, Math.max(1000, ms));
+  })();
+
+  // керування
+  document.addEventListener('visibilitychange', ()=>{ if (document.hidden) pause(); else resume(); });
+  window.addEventListener('keydown', (e)=>{
+    const onBody = document.activeElement === document.body;
+    if (e.key === 'ArrowRight'){ pause(); setFsMode(false); show(idx+1); }
+    if (e.key === 'ArrowLeft'){  pause(); setFsMode(false); show(idx-1); }
+    if (e.key === ' '){
+      if (onBody) e.preventDefault();
+      paused ? resume() : pause();
+    }
+  });
+</script>
+</body>
+</html>
+\
